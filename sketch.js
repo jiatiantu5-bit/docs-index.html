@@ -1,11 +1,11 @@
 let aVideos = [];
 let bVideo;
 let currentVideo;
-let mic;
-let vol = 0;
-let threshold = 20;
-let state = "A"; // 当前状态 A/B
-let switching = false;
+let state = "A";
+let mic, amplitude;
+let threshold = 0.2; // 调整拍手灵敏度
+let blackStart = 0;
+let showBlack = false;
 
 function preload() {
   // 加载 A 类视频
@@ -18,77 +18,76 @@ function preload() {
 
 function setup() {
   createCanvas(windowWidth, windowHeight);
-  textFont("Noto Sans SC");
-  textSize(24);
-  textAlign(LEFT, TOP);
+  textSize(20);
+  fill(255);
+  noStroke();
 
   // 初始化麦克风
   mic = new p5.AudioIn();
-  mic.start();
+  mic.start(() => console.log("Mic started"));
+  amplitude = new p5.Amplitude();
+  amplitude.setInput(mic);
 
-  // 隐藏所有视频
-  for (let v of aVideos) {
-    v.hide();
-  }
-  bVideo.hide();
-
-  // 随机播放一个A
+  // 随机播放一个 A 视频
   playRandomA();
 }
 
 function draw() {
   background(0);
 
-  // 更新响度
-  vol = mic.getLevel() * 1000;
-
-  // 显示视频
-  if (currentVideo) {
+  // 显示当前视频
+  if (currentVideo && !showBlack) {
     image(currentVideo, 0, 0, width, height);
   }
 
-  // 文字信息
-  let infoText = `模式: ${state}
-响度: ${vol.toFixed(1)} (阈值: ${threshold})
-文件: ${state === "A" ? "A类随机视频" : "B1.mp4"}
-提示: 拍手或制造较大声音触发切换`;
-  select('#info').html(infoText);
+  // 检测声音
+  let level = amplitude.getLevel();
+  text(
+    `模式: ${state}\n响度: ${level.toFixed(2)} (阈值: ${threshold})`,
+    20,
+    40
+  );
 
-  // 检测声音触发
-  if (!switching && state === "A" && vol > threshold) {
-    switching = true;
+  // 声音触发
+  if (state === "A" && level > threshold && !showBlack) {
     switchToB();
+  }
+
+  // 黑屏逻辑
+  if (showBlack) {
+    background(0);
+    if (millis() - blackStart > 10000) {
+      showBlack = false;
+      playRandomA();
+    }
   }
 }
 
-// 播放随机A视频
 function playRandomA() {
+  stopAllVideos();
   state = "A";
-  switching = false;
-  if (currentVideo) currentVideo.stop();
-
   let randIndex = floor(random(aVideos.length));
   currentVideo = aVideos[randIndex];
   currentVideo.show();
-  currentVideo.loop();
-
-  currentVideo.onended(() => {
-    if (state === "A" && !switching) {
-      playRandomA(); // 播完继续随机A
-    }
-  });
+  currentVideo.play();
+  currentVideo.onended(() => playRandomA());
 }
 
-// 切换到B视频
 function switchToB() {
-  if (currentVideo) currentVideo.stop();
+  stopAllVideos();
   state = "B";
   currentVideo = bVideo;
   currentVideo.show();
   currentVideo.play();
-
-  // B播放完回到A
   currentVideo.onended(() => {
-    playRandomA();
+    showBlack = true;
+    blackStart = millis();
+  });
+}
+
+function stopAllVideos() {
+  [...aVideos, bVideo].forEach((v) => {
+    v.stop();
+    v.hide();
   });
 }
