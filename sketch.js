@@ -1,190 +1,111 @@
-/***********************
- * p5 + 串口 + 视频状态机
- * A 组：随机连续播放
- * 触发(拍手/响度>阈值)：切到 B1 播完 → 回到 A 组随机
- * 空格 = 手动触发（没连串口时测试）
- ************************/
+// 🎬 声音控制视频播放系统（完整版）
+// 功能说明：
+// - 随机播放 A1~A6
+// - 声音响度超过阈值（拍手或其他）时切换到 B1
+// - B1 播放结束后 → 黑屏10秒 → 再随机播放A类
+// - 持续循环
+// - 自动匹配视频尺寸，不模糊
 
-// === 可按需修改：文件名要与你仓库里的文件一致 ===
-const A_FILES = ["A1.mp4","A2.mp4","A3.mp4","A4.mp4","A5.mp4","A6.mp4"]; // 有几个就写几个
-const B_FILE  = "B1.mp4"; // 如果你是 .mov，就改成 "B1.mov"
+let aVideos = [];
+let bVideo;
+let currentVideo;
+let amplitude;
+let state = "A";
+let blackScreenTimer = 0;
+let blackScreen = false;
 
-const THRESHOLD = 200;     // 触发阈值（串口响度 ≥ 此值切到 B）
-const COOLDOWN_MS = 1500;  // 触发冷却，避免抖动
-const SHOW_DEBUG = true;   // true = 左上角显示状态信息
+const THRESHOLD = 20; // 声音触发阈值（可调大一点，比如 30）
 
-// === 运行时变量 ===
-let serial, latest = 0;     // 串口对象 / 最新响度
-let lastTrigger = -9999;    // 上次触发时间
-let curMode = "A";          // A: 播放 A 组；B: 播放 B1
-let vid = null;             // p5 媒体对象
-let hudEl;                  // 顶部信息 DOM
-
-// 端口自动选择（mac 常见前缀）
-const PREFERRED_PREFIXES = ["/dev/cu.usbmodem", "/dev/tty.usbmodem", "/dev/cu.usbserial", "/dev/tty.usbserial"];
+function preload() {
+  // ✅ 改成你自己的GitHub Pages上视频路径（或相对路径）
+  for (let i = 1; i <= 6; i++) {
+    aVideos.push(createVideo(`A${i}.mp4`));
+  }
+  bVideo = createVideo("B1.mp4");
+}
 
 function setup() {
-  createCanvas(windowWidth, windowHeight);
-  hudEl = document.getElementById('hud');
+  // ✅ 画布自动匹配第一个视频的尺寸
+  createCanvas(1920, 1080); // 或自动用视频宽高
+  background(0);
 
-  // 串口（可选）
-  try {
-    serial = new p5.SerialPort();
-    serial.on('list', tryOpenBestPort);
-    serial.on('open', () => print('[serial] opened'));
-    serial.on('data', onSerialData);
-    serial.on('error', e => print('[serial] error:', e));
-    serial.on('close', () => print('[serial] closed'));
-    serial.list();
-  } catch(e) {
-    print('[serial] init failed:', e);
-  }
+  amplitude = new p5.Amplitude();
+  userStartAudio();
 
-  // 初始进入 A 组
-  enterA(true);
+  // 隐藏所有视频
+  for (let v of aVideos) v.hide();
+  bVideo.hide();
+
+  playRandomAVideo();
 }
 
-function windowResized() {
-  resizeCanvas(windowWidth, windowHeight);
+// 播放随机A类视频
+function playRandomAVideo() {
+  state = "A";
+  let randIndex = floor(random(aVideos.length));
+  currentVideo = aVideos[randIndex];
+  currentVideo.stop();
+  currentVideo.show();
+  currentVideo.loop();
+  currentVideo.volume(0);
+  currentVideo.onended(() => playRandomAVideo()); // 自动切下一个A
 }
 
-// 自动选择一个看起来像 Arduino 的端口
-function tryOpenBestPort(list) {
-  print('[serial] ports:', list);
-  let port = list.find(p => PREFERRED_PREFIXES.some(pref => p.startsWith(pref))) || list[0];
-  if (port) {
-    print('[serial] open:', port);
-    serial.open(port);
-  } else {
-    print('[serial] no port found');
-  }
+// 切换到B类视频
+function switchToBVideo() {
+  if (state === "B" || blackScreen) return;
+  state = "B";
+  if (currentVideo) currentVideo.stop();
+
+  currentVideo = bVideo;
+  currentVideo.show();
+  currentVideo.play();
+  currentVideo.volume(0);
+  currentVideo.onended(() => startBlackScreen());
 }
 
-// 串口读一行，取整数
-function onSerialData() {
-  let s = serial.readLine();
-  if (typeof s !== 'string') return;
-  s = s.trim();
-  if (!s) return;
-  let v = parseInt(s, 10);
-  if (Number.isFinite(v)) {
-    latest = v;
-  } else {
-    // 调试：打印非数字行
-    // console.log('[serial] non-number:', JSON.stringify(s));
-  }
+// 黑屏10秒后返回A视频
+function startBlackScreen() {
+  currentVideo.hide();
+  blackScreen = true;
+  blackScreenTimer = millis();
 }
 
 function draw() {
   background(0);
 
-  // —— 状态机逻辑 —— //
-  if (curMode === "A") {
-    // 串口触发（或按键模拟）
-    if (shouldTrigger()) {
-      enterB();
+  // 🔊 声音检测
+  let level = amplitude.getLevel() * 200;
+  fill(255);
+  textSize(20);
+  text(`模式: ${state}`, 10, 20);
+  text(`响度: ${level.toFixed(1)} (阈值: ${THRESHOLD})`, 10, 40);
+  text(`文件: ${state === "A" ? "A类随机视频" : "B1.mp4"}`, 10, 60);
+  text(`提示: 拍手或制造较大声音触发切换`, 10, 80);
+
+  // 🚀 黑屏逻辑
+  if (blackScreen) {
+    background(0);
+    if (millis() - blackScreenTimer > 10000) { // 10秒后
+      blackScreen = false;
+      playRandomAVideo();
     }
+    return;
   }
 
-  // 把视频画到画布（自适应居中）
-  if (vid) {
-    const vw = vid.width  || width;
-    const vh = vid.height || height;
-    const s = min(width / vw, height / vh);
-    const rw = vw * s, rh = vh * s;
-    image(vid, (width - rw)/2, (height - rh)/2, rw, rh);
+  // 🎥 显示当前视频画面
+  if (currentVideo) {
+    image(currentVideo, 0, 0, width, height);
   }
 
-  // HUD 调试
-  if (SHOW_DEBUG && hudEl) {
-    hudEl.innerHTML =
-      `<b>模式</b>：${curMode}　` +
-      `<b>响度</b>：${latest}（阈值：${THRESHOLD}）　` +
-      `<b>文件</b>：${currentName() || '-'}　` +
-      `<b>提示</b>：${serial ? '串口尝试连接中（可忽略）' : '未使用串口；按空格模拟触发'}`;
+  // 🚨 声音触发检测
+  if (state === "A" && level > THRESHOLD) {
+    switchToBVideo();
   }
 }
 
-// —— 触发条件：串口值 ≥ 阈值 + 冷却 —— //
-function shouldTrigger() {
-  let now = millis();
-  if (now - lastTrigger < COOLDOWN_MS) return false;
-  if (latest >= THRESHOLD) {
-    lastTrigger = now;
-    return true;
-  }
-  return false;
-}
-
-// —— 键盘：空格模拟触发 —— //
+// ✅ 空格键模拟拍手（调试用）
 function keyPressed() {
-  if (key === ' ') {
-    lastTrigger = millis();
-    if (curMode === 'A') enterB();
-  }
+  if (key === " ") switchToBVideo();
 }
 
-// —— 进入 A 组：随机连播 —— //
-function enterA(forceNew = false) {
-  curMode = "A";
-  // 如果没有视频或要求强制换新，就挑一条
-  if (!vid || forceNew) {
-    loadVideo(randomA(), true, () => {
-      // A 组要连播：播完自动换下一条
-      vid.elt.onended = () => enterA(true);
-      vid.loop(); // 连续播放（防止某些浏览器 ended 不触发）
-    });
-  } else {
-    // 已有视频时继续 loop
-    vid.loop();
-  }
-}
-
-// —— 进入 B：播放一遍，结束回到 A —— //
-function enterB() {
-  curMode = "B";
-  loadVideo(B_FILE, false, () => {
-    vid.elt.onended = () => enterA(true);
-    vid.play(); // 只播一遍
-  });
-}
-
-// —— 工具：装载某个视频（文件名） —— //
-function loadVideo(name, mute = true, onready = null) {
-  if (vid) {
-    try { vid.remove(); } catch(e) {}
-    vid = null;
-  }
-  // p5 的 createVideo 支持相对路径；文件与 index.html 同目录即可
-  vid = createVideo(name, () => {
-    // ready callback
-    if (typeof onready === 'function') onready();
-  });
-  vid.hide();          // 不要让原生 <video> 出现在页面上
-  vid.volume(mute ? 0 : 1);
-}
-
-// —— A 组随机 —— //
-function randomA() {
-  return random(A_FILES);
-}
-
-// —— 取当前文件名（显示用） —— //
-function currentName() {
-  if (!vid) return '';
-  // p5 媒体对象内部存着 <video> 元素，可以拿到 src
-  const src = vid.elt?.currentSrc || vid.elt?.src || '';
-  if (!src) return '';
-  try {
-    return decodeURIComponent(src.split('/').pop());
-  } catch {
-    return src;
-  }
-}
-
-// —— 处理用户交互（移动端/桌面浏览器首次需点击才能播放） —— //
-function mousePressed() {
-  if (vid && vid.elt && vid.elt.paused) {
-    vid.loop();
-  }
-}
