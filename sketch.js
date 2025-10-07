@@ -1,94 +1,127 @@
 let aVideos = [];
 let bVideo;
 let currentVideo;
-let state = "A";
 let mic;
-let threshold = 0.2; // 拍手触发阈值，可调节
+let threshold = 20; // 触发B视频的响度阈值
+let state = "A";
+let isBlack = false;
+let blackTimer = 0;
+let blackDuration = 10000; // 黑屏10秒
+let videoReady = false;
 
 function preload() {
-  // A类视频
-  for (let i = 1; i <= 6; i++) {
-    aVideos.push(createVideo(`A${i}.mp4`));
-  }
-  // B类视频
-  bVideo = createVideo("B1.mp4");
+  // ✅ 改成你的 GitHub Pages 链接
+  const baseURL = "https://jiatiantu5-bit.github.io/docs-index.html/";
+
+  aVideos = [
+    createVideo(baseURL + "A1.mp4"),
+    createVideo(baseURL + "A2.mp4"),
+    createVideo(baseURL + "A3.mp4"),
+    createVideo(baseURL + "A4.mp4"),
+    createVideo(baseURL + "A5.mp4"),
+    createVideo(baseURL + "A6.mp4")
+  ];
+
+  bVideo = createVideo(baseURL + "B1.mp4");
 }
 
 function setup() {
-  // 自动根据屏幕创建全屏画布
   createCanvas(windowWidth, windowHeight);
-  background(0);
-
-  // 初始化麦克风
+  userStartAudio(); // ✅ 激活音频
   mic = new p5.AudioIn();
   mic.start();
 
-  // 隐藏所有视频
+  // 初始化所有视频设置
   for (let v of aVideos) {
     v.hide();
+    v.volume(0);
   }
   bVideo.hide();
+  bVideo.volume(0);
 
-  // 启动第一个A类视频
   playRandomAVideo();
 }
 
 function draw() {
   background(0);
 
-  // 显示当前视频帧
-  if (currentVideo) {
-    image(currentVideo, 0, 0, width, height);
-  }
+  let vol = mic.getLevel() * 1000; // 响度放大，方便显示
 
-  // 获取当前音量（检测拍手）
-  let vol = mic.getLevel();
-  console.log(vol);
+  if (!isBlack) {
+    // 显示当前视频画面
+    if (currentVideo) {
+      image(currentVideo, 0, 0, width, height);
+    }
 
-  if (state === "A" && vol > threshold) {
-    switchToBVideo();
-  }
+    // 🎤 声音检测逻辑
+    if (state === "A" && vol > threshold) {
+      switchToBVideo();
+    }
 
-  // 当B播放完毕后，黑屏10秒再回到A
-  if (state === "B" && currentVideo.elt.ended) {
-    state = "black";
+    // 播放完一个A视频就随机下一个
+    if (state === "A" && currentVideo && currentVideo.elt.ended) {
+      playRandomAVideo();
+    }
+
+    // B视频播放完 → 黑屏
+    if (state === "B" && currentVideo && currentVideo.elt.ended) {
+      startBlackScreen();
+    }
+  } else {
     background(0);
-    currentVideo.stop();
-    currentVideo.hide();
-    setTimeout(playRandomAVideo, 10000);
+    if (millis() - blackTimer > blackDuration) {
+      isBlack = false;
+      playRandomAVideo();
+    }
   }
+
+  // 显示信息（调试）
+  fill(255);
+  textSize(24);
+  textAlign(LEFT, TOP);
+  text(`模式: ${state}`, 20, 20);
+  text(`响度: ${vol.toFixed(1)} (阈值: ${threshold})`, 20, 50);
+  text(`文件: ${state === "A" ? "A类随机视频" : "B1.mp4"}`, 20, 80);
+  text(`提示: 拍手或制造较大声音触发切换`, 20, 110);
 }
 
-// 播放A类视频
+// 播放随机A类视频
 function playRandomAVideo() {
+  state = "A";
   let randIndex = floor(random(aVideos.length));
   currentVideo = aVideos[randIndex];
-  currentVideo.volume(0);
-  currentVideo.loop(); // 自动播放循环
+  stopAllVideos();
   currentVideo.show();
   currentVideo.play();
-  state = "A";
 }
 
-// 播放B类视频
+// 切换到B类视频
 function switchToBVideo() {
-  if (currentVideo) {
-    currentVideo.stop();
-    currentVideo.hide();
-  }
-  currentVideo = bVideo;
-  currentVideo.volume(0);
-  currentVideo.play();
-  currentVideo.show();
   state = "B";
+  stopAllVideos();
+  currentVideo = bVideo;
+  currentVideo.show();
+  currentVideo.play();
 }
 
-// 允许用户点击播放（浏览器策略）
-function mousePressed() {
-  if (getAudioContext().state !== "running") {
-    getAudioContext().resume();
+// 黑屏逻辑
+function startBlackScreen() {
+  stopAllVideos();
+  isBlack = true;
+  blackTimer = millis();
+}
+
+// 停止所有视频
+function stopAllVideos() {
+  for (let v of aVideos) {
+    v.stop();
   }
-  if (currentVideo) {
-    currentVideo.play();
+  bVideo.stop();
+}
+
+// 空格键模拟拍手
+function keyPressed() {
+  if (key === " ") {
+    switchToBVideo();
   }
 }
